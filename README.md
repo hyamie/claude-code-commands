@@ -108,6 +108,19 @@ The key insight: Codex gets a fresh, self-contained brief per step — not the a
 | `/review-skill-proposals` | Review auto-generated skill proposals |
 | `/autonomy` | Unattended autonomous loop (Docker sandbox) |
 
+## Scripts
+
+The `scripts/` directory contains shell wrappers that run the [Codex CLI](https://www.npmjs.com/package/@openai/codex) for multi-model workflows.
+
+| Script | Used by | Purpose |
+|--------|---------|---------|
+| `scripts/forge-codex.sh` | `/forge` | Runs Codex for each implementation step. Generates `status.json`, `summary.md`, `raw.log`. Supports timeout and review mode. |
+| `scripts/review-codex.sh` | `/review` | Runs Codex as a code reviewer in read-only mode. Generates `status.json` and captures `review.md`. |
+
+**Prerequisite:** Install the Codex CLI — `npm i -g @openai/codex` (requires ChatGPT Pro).
+
+Both scripts handle timeout enforcement, artifact generation, and print a machine-readable `DONE` line for the orchestrator to parse. If Codex is not installed, `/forge` auto-falls back to Claude's Builder agent and `/review` continues with Claude-only results.
+
 ## Installation
 
 Copy the commands you want to your project:

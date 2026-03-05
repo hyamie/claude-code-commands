@@ -239,7 +239,7 @@ STEP_BASE_SHA=$(git rev-parse HEAD)
 Run forge-codex.sh via Bash tool (background):
 
 ```bash
-bash ~/claude-env/scripts/forge-codex.sh \
+bash scripts/forge-codex.sh \
   "${REPO_PATH}" \
   "${ARTIFACT_PATH}" \
   "${ARTIFACT_PATH}/task.md" \
@@ -745,7 +745,7 @@ Then print: DONE step=final-implementation pass=<true|false> artifacts=artifacts
 
 Run via forge-codex.sh:
 ```bash
-bash ~/claude-env/scripts/forge-codex.sh \
+bash scripts/forge-codex.sh \
   "${REPO_PATH}" \
   "artifacts/${RUN_ID}/final-review/implementation" \
   "artifacts/${RUN_ID}/final-review/implementation/task.md" \
