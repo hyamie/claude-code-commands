@@ -6,7 +6,7 @@ argument-hint: "<requirements or path/to/plan.md>"
 
 # /duo — Dual-Model Workflow
 
-Claude Opus 4.6 architects and reviews. Codex CLI 5.3 builds.
+Claude Opus 4.6 architects and reviews. Codex CLI 5.4 builds.
 Two plan files: `plan.md` (Claude) and `plan.codex.md` (Codex).
 
 ## Usage
@@ -22,7 +22,7 @@ Two plan files: `plan.md` (Claude) and `plan.codex.md` (Codex).
 | Role | Model | Responsibilities |
 |------|-------|------------------|
 | Architect | Claude Opus 4.6 | Plan, review, deploy, MCP ops, decisions |
-| Builder | Codex CLI 5.3 | Implement code, write tests, run verification |
+| Builder | Codex CLI 5.4 | Implement code, write tests, run verification |
 
 **Claude does NOT:** Write implementation code (Codex does this)
 **Codex does NOT:** Make architectural decisions, deploy, use MCPs (except GitHub)

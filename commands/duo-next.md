@@ -87,7 +87,7 @@ If verification passes (or issues were fixed):
    feat(phase-N): [description of phase work]
 
    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
-   Co-Authored-By: Codex CLI 5.3 <noreply@openai.com>
+   Co-Authored-By: Codex CLI 5.4 <noreply@openai.com>
    COMMIT_EOF
    )"
    ```

@@ -35,7 +35,7 @@ and integrated Codex external review.
 │        No issues? → <<<REVIEW_DONE>>>               │
 │                        ↓                            │
 │                  REVIEW PHASE 2                     │
-│             (Codex GPT-5.2 external)                │
+│             (Codex GPT-5.4 external)                │
 │        Claude evaluates findings → Fix valid ones   │
 │        No issues? → <<<CODEX_DONE>>>                │
 │                        ↓                            │

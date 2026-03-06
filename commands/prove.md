@@ -6,7 +6,7 @@ argument-hint: "[description of what to prove]"
 
 # Prove - Evidence-Based Verification
 
-Have Codex (GPT-5.2-Codex debugging specialist) generate concrete evidence that code works.
+Have Codex (GPT-5.4 debugging specialist) generate concrete evidence that code works.
 Not "tests pass" - actual proof of behavior.
 
 **Use after implementing, before claiming "done".**
@@ -179,7 +179,7 @@ If any proof fails:
 
 ## Why Codex?
 
-Codex (GPT-5.2-Codex) is specifically tuned for:
+Codex (GPT-5.4) is specifically tuned for:
 - Debugging and verification
 - Generating test cases
 - Understanding code behavior

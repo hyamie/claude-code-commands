@@ -161,7 +161,7 @@ Write `task.md` to the artifact path. Use this template — fill in from the pla
 # Step XX — <short title from plan task>
 
 ## Context
-- Working directory: <REPO_PATH absolute, e.g. ~/projects/my-project>
+- Working directory: <REPO_PATH absolute, e.g. /home/user/projects/active/my-project>
 - Plan file: <REPO_PATH>/<PLAN_FILE>
 - PRD: <REPO_PATH>/<PRD_FILE or "None">
 - Acceptance: <REPO_PATH>/${RUN_DIR}/ACCEPTANCE.md
@@ -818,7 +818,7 @@ Reviews: correctness (Claude) + implementation (Codex)
 Gates: lint, typecheck, test, build, secrets — all pass
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
-Co-Authored-By: Codex CLI 5.3 <noreply@openai.com>
+Co-Authored-By: Codex CLI 5.4 <noreply@openai.com>
 EOF
 )"
 ```
