@@ -172,6 +172,45 @@ Step  Worker   Task
 04    codex    Write unit tests
 ```
 
+### Step 6a: Reference File Analysis (Codex Budget Guard)
+
+For each task assigned to `codex`, analyze the reference files it would need to read:
+
+1. **Extract reference files** from the plan task. Look for:
+   - "Files to Read" sections listing file paths
+   - "Read these files" instructions
+   - Explicit file paths in the task description that the worker must read before implementing
+   - Do NOT count files the worker will CREATE (those are output, not input)
+
+2. **Measure reference burden** for each Codex task:
+   ```bash
+   REF_COUNT=<number of reference files>
+   REF_BYTES=0
+   for f in <reference_files>; do
+     if [ -f "$f" ]; then
+       REF_BYTES=$((REF_BYTES + $(wc -c < "$f")))
+     fi
+   done
+   ```
+
+3. **Apply thresholds:**
+   - **>4 reference files OR >10KB total reference size** → auto-reassign to `builder`
+   - Print warning: `⚠️ step-XX reassigned codex→builder (N ref files, NKB total — exceeds Codex reasoning budget)`
+
+   These thresholds are based on observed Codex no-op failures: tasks requiring 7 large preset files (the ai-answering-factory case) exhausted Codex's reasoning budget on file reads alone, producing zero output.
+
+4. **Print reference analysis table** (only for Codex tasks that were reassigned):
+   ```
+   Reference File Analysis (Codex budget guard):
+   Step  Refs  Size    Action
+   ──────────────────────────────────────────────
+   01    7     28KB    reassigned → builder
+   02    8     32KB    reassigned → builder
+   03    2     3KB     OK (stays codex)
+   ```
+
+   If no reassignments occurred, print: `Reference analysis: all Codex tasks within budget.`
+
 ### Step 6b: File Scope Analysis and Parallel Groups
 
 For each task in the plan, extract file scope from the task text. Look for:
