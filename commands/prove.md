@@ -52,19 +52,17 @@ echo "$CHANGED"
 
 ### Step 2: Send to Codex
 
-Use Codex MCP to analyze the code:
+Use Codex CLI to analyze the code. Write the prompt to a temp file and invoke via `codex exec`:
 
-```
-Call mcp__codex__codex with prompt:
+```bash
+# Gather context
+DIFF=$(git diff HEAD~1 2>/dev/null || git diff)
+FOCUS="[argument if provided, or 'recent changes']"
 
-"You are a verification specialist. Your job is to PROVE code works, not just say it does.
+cat > /tmp/prove-prompt.md << 'PROMPT_EOF'
+You are a verification specialist. Your job is to PROVE code works, not just say it does.
 
 TASK: Generate concrete evidence that this code works correctly.
-
-CHANGES:
-[git diff output]
-
-FOCUS AREA: [argument if provided]
 
 For each significant change, provide:
 
@@ -85,7 +83,22 @@ For each significant change, provide:
    - Expected: [error handling behavior]
    - How to verify: [command or test]
 
-Generate RUNNABLE verification commands. Not theory - proof."
+Generate RUNNABLE verification commands. Not theory - proof.
+PROMPT_EOF
+
+# Append diff context
+echo -e "\n\nCHANGES:\n$DIFF\n\nFOCUS AREA: $FOCUS" >> /tmp/prove-prompt.md
+
+# Run via codex-companion.mjs (app-server, landlock sandbox)
+COMPANION="$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)"
+timeout --kill-after=30 300 node "$COMPANION" task \
+  --cwd "$(pwd)" \
+  --json \
+  --prompt-file /tmp/prove-prompt.md \
+  2>/tmp/prove-stderr.log | jq -r '.rawOutput // empty' > /tmp/prove-output.md
+
+# Read result
+cat /tmp/prove-output.md
 ```
 
 ### Step 3: Execute Verification Commands

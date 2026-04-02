@@ -29,6 +29,8 @@ For each enabled plugin, try updating and see if there's a newer version:
 claude plugin list 2>/dev/null | grep -E "^  ❯|Version:" | paste - - | grep "enabled"
 ```
 
+Note: There's no "check for updates" - you have to try `claude plugin update <name>` to see if newer version exists. Consider updating all plugins periodically.
+
 ### 3. Check CLIs
 
 **CLI Registry** (add new CLIs here when installed):
@@ -39,6 +41,31 @@ claude plugin list 2>/dev/null | grep -E "^  ❯|Version:" | paste - - | grep "e
 | gh | `gh --version` | GitHub: cli/cli | See below |
 | railway | `railway --version` | npm: @railway/cli | `npm i -g @railway/cli` |
 | vercel | `vercel --version` | npm: vercel | `npm i -g vercel` |
+| openclaw | `openclaw --version` | npm: openclaw | `npm i -g openclaw` |
+| skills | `skills --version` | npm: skills | `npm i -g skills` |
+| playwright-cli | `playwright-cli --version` | npm: @playwright/cli | `npm i -g @playwright/cli` |
+| skill-scanner | `skill-scanner --version` | PyPI: cisco-ai-skill-scanner | `pipx upgrade cisco-ai-skill-scanner` |
+| bird | `bird --version` | npm: @steipete/bird | `npm i -g @steipete/bird` |
+| go | `go version` | https://go.dev/dl/ | Download and extract to ~/go |
+| github-mcp-server | `~/bin/github-mcp-server --help 2>&1 \| head -1` | GitHub: github/github-mcp-server | Build from source (Go) |
+| notebooklm | `notebooklm --version` | PyPI: notebooklm-py | `pipx upgrade notebooklm-py` |
+| quickbooks-mcp | `cd ~/.mcp-servers/quickbooks-online && git log --oneline -1` | GitHub: intuit/quickbooks-online-mcp-server | `cd ~/.mcp-servers/quickbooks-online && git pull && npm install && npm run build` |
+| octofriend | `octofriend version` | npm: octofriend | `npm i -g octofriend` |
+| qmd | `qmd --version` | npm: @tobilu/qmd | `npm i -g @tobilu/qmd` |
+| mcp-searxng | `npm ls -g mcp-searxng --depth=0 2>/dev/null \| grep mcp-searxng` | npm: mcp-searxng | `npm i -g mcp-searxng` |
+| ha-mcp | `uvx --python 3.13 ha-mcp --version 2>/dev/null \|\| echo "check PyPI"` | PyPI: ha-mcp | `uvx cache clean ha-mcp` (uvx auto-fetches latest) |
+| resend | `resend --version` | npm: resend-cli | `npm i -g resend-cli` |
+| gws | `gws --version` | npm: @googleworkspace/cli | `npm i -g @googleworkspace/cli` |
+| autotask | `autotask --version` | PyPI: autotask-client | `pipx upgrade autotask-client` |
+| codex (remote) | `ssh <remote-host> "codex --version"` | npm: @openai/codex | `ssh <remote-host> "npm i -g @openai/codex"` |
+| steel-mcp-server | `npm ls -g @steel-dev/mcp-server --depth=0 2>/dev/null \| grep steel` | GitHub: steel-dev/steel-mcp-server | `cd /tmp && rm -rf steel-mcp-server && git clone https://github.com/steel-dev/steel-mcp-server.git && cd steel-mcp-server && npm install && npm run build && npm link` |
+| ollama | `ollama --version` | GitHub: ollama/ollama | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| shadcn | `shadcn --version` | npm: shadcn | `npm i -g shadcn` |
+| recon | `recon --version` | GitHub: gavraz/recon | Clone + `cargo build --release`, copy to ~/bin/ |
+| php | `php -v \| head -1` | apt: php8.3-cli | `sudo apt-get update && sudo apt-get install -y php8.3-cli` |
+| composer | `composer --version` | https://getcomposer.org | `curl -sS https://getcomposer.org/installer \| php -- --install-dir=~/.local/bin --filename=composer` |
+| wp-cli | `wp --version` | GitHub: wp-cli/wp-cli | `curl -sS https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o ~/.local/bin/wp && chmod +x ~/.local/bin/wp` |
+| phpcs | `phpcs --version` | Composer: squizlabs/php_codesniffer | `composer global update squizlabs/php_codesniffer` |
 
 Run in parallel:
 ```bash
@@ -59,7 +86,7 @@ echo "vercel:$(npm view vercel version 2>/dev/null)"
 
 ### 4. Create Todo List
 
-Create items for each update needed:
+Use TodoWrite to create items for each update needed:
 
 **Categories:**
 - "Update Claude Code to vX.X.X" (if available)
@@ -118,12 +145,24 @@ When you install a new CLI, add it to the "CLI Registry" table above with:
 2. Where to check latest version (GitHub releases or npm)
 3. Update command
 
+## Python MCP Servers (Manual Check)
+
+These are local Python projects — check for dependency updates:
+
+| MCP | Location | Check Command |
+|-----|----------|---------------|
+| wordpress | `~/projects/active/wp-site-intelligence/` | `cd ~/projects/active/wp-site-intelligence && .venv/bin/pip list --outdated` |
+
 ## MCP Packages (Info Only)
 
-These auto-update via `npx @latest` - no action needed. Common ones:
+These auto-update via `npx @latest` - no action needed:
 - @playwright/mcp
 - @modelcontextprotocol/server-sequential-thinking
+- @modelcontextprotocol/server-memory
 - @cloudflare/mcp-server-cloudflare
 - @supabase/mcp-server-supabase
+- @mauricio.wolff/mcp-obsidian
+
+**Note:** GitHub MCP moved from `@modelcontextprotocol/server-github` (npx) to official `github/github-mcp-server` (Go binary at `~/bin/github-mcp-server`). Update by rebuilding from source.
 
 Force refresh if issues: `rm -rf ~/.npm/_npx`

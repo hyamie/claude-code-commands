@@ -147,30 +147,73 @@ Create empty template at `${RUN_DIR}/DECISIONS.md`:
 Append-only. Workers add entries during /forge runs. Verifiers read but don't modify.
 ```
 
-### Step 6: Assign Worker Types
+### Step 6: Assign Worker Types and Models
 
-For each task in the plan, assign a worker type using keyword heuristics:
+For each task in the plan, assign a worker type AND model using the tier+type matrix below. This replaces the old keyword heuristic approach.
 
-**Codex (code implementation):**
-- Keywords: create, implement, write, build, add, refactor, fix, test, code, function, class, module, endpoint, API, migration, schema
-- Default for tasks that don't match other patterns
-- **SCOPE LIMIT: Max 5 new files or ~150 lines of spec per Codex step.** If a task exceeds this, split it into multiple steps or assign to builder. Codex exhausts its reasoning budget on large tasks and produces no output (no-op).
+**Step 6 sub-process:**
+1. Determine the task type using keyword detection (see table below)
+2. Read the tier from `tier_assignments` (assigned in Step 6c, which runs after this — use `medium` as provisional default, then re-run assignment after 6c assigns tiers)
+3. Look up the worker + model from the matrix
 
-**Builder (Claude agent — config, MCP, non-code):**
-- Keywords: configure, setup, config, MCP, deploy, environment, secret, credential, hook, skill, command, documentation, update CLAUDE.md, register
-- Also use builder for tasks requiring 6+ new files or complex multi-component implementations
+**Worker+Model Assignment Matrix (tier × task type):**
 
-For each task, record the assignment. Print a table:
+| Task Type | Trivial | Small | Medium | Large |
+|-----------|---------|-------|--------|-------|
+| Implementation (default) | codex | codex | codex | builder (opus) |
+| Test generation | codex | codex | codex | builder (sonnet) |
+| API integration | codex | codex | codex | builder (opus) |
+| Frontend/UI | codex | codex | codex | builder (sonnet) |
+| DevOps/scripts | codex | codex | codex | builder (sonnet) |
+| Architecture/refactor | — | builder (sonnet) | builder (opus) | builder (opus) |
+| Security work | — | builder (opus) | builder (opus) | builder (opus) |
+| Documentation | codex | codex | builder (sonnet) | builder (sonnet) |
+| Database migration | — | builder (sonnet) | builder (sonnet) | builder (opus) |
+
+**"—" means that tier/type combination shouldn't exist.** If encountered, assign builder (sonnet) as safe default.
+
+**Task type detection keywords:**
+- DevOps/scripts: shell, bash, script, dockerfile, CI, CD, pipeline, deploy, infra
+- Frontend/UI: component, page, dashboard, UI, CSS, layout, React, Next
+- Test generation: test, spec, fixture, mock, assert
+- Architecture/refactor: refactor across, redesign, restructure, migrate pattern
+- Security: auth, permission, RBAC, vulnerability, sanitize, encrypt
+- Database migration: migration, schema, DDL, ALTER TABLE, index
+- Documentation: docs, README, guide, CLAUDE.md, operations-guide
+- API integration: API, endpoint, REST, GraphQL, webhook, fetch, request
+- Implementation: (default — everything else)
+
+**SCOPE LIMIT (unchanged):** Max 5 new files or ~150 lines of spec per Codex step. If exceeded, reassign codex→builder. Codex exhausts its reasoning budget on large tasks.
+
+For each task, record the worker, model, and task type. Print a table:
 
 ```
 Worker Assignments:
-Step  Worker   Task
-──────────────────────────────────────
-01    codex    Create user model
-02    codex    Add API endpoint
-03    builder  Configure MCP server
-04    codex    Write unit tests
+Step  Worker   Model    Type              Task
+─────────────────────────────────────────────────────────
+01    codex    —        devops/scripts    Write deploy script
+02    codex    —        implementation    Create user model
+03    builder  opus     security          Add auth middleware
+04    codex    —        api-integration   Wire up payment endpoint
 ```
+
+**Store model assignments and task types in forge-status.json** alongside worker assignments:
+```json
+"model_assignments": {
+  "step-02": "sonnet",
+  "step-03": "opus"
+},
+"task_types": {
+  "step-01": "devops/scripts",
+  "step-02": "implementation",
+  "step-03": "security",
+  "step-04": "implementation"
+}
+```
+Codex steps have no model_assignment entry (Codex uses its own model internally).
+Every step MUST have a task_types entry — forge.md reads this to set expect_changes.
+
+**NOTE:** Tier assignments from Step 6c may change the matrix lookup. After Step 6c completes, re-validate worker+model assignments against final tiers. If any assignment changes, update both `worker_assignments` and `model_assignments` and print the correction.
 
 ### Step 6a: Reference File Analysis (Codex Budget Guard)
 
@@ -256,6 +299,91 @@ Store in `${RUN_DIR}/forge-status.json`:
 ```
 
 Print parallel groups in the readiness report (Step 9).
+
+### Step 6c: Assign Complexity Tiers
+
+For each step in the plan, assign a complexity tier based on the task description. Read from the plan file for explicit `- **Tier:** <tier>` overrides first; fall back to heuristics.
+
+**Tier definitions:**
+| Tier | Criteria | Pipeline Effect |
+|------|----------|----------------|
+| `trivial` | Single-file change, <20 lines, no new logic | Skip de-sloppify + skip AI review |
+| `small` | 1-3 files, straightforward logic | Skip AI review |
+| `medium` | 3-6 files or new patterns (default) | Full pipeline |
+| `large` | 7+ files or architectural change | Full pipeline + extra architecture review pass |
+
+**Tier assignment heuristics (when no explicit override):**
+
+```
+for each step:
+  # Check for explicit override in plan
+  TIER=$(grep -A5 "^### Step <N>" plan | grep -oP '(?<=\*\*Tier:\*\* )(trivial|small|medium|large)' || "")
+
+  if [ -n "$TIER" ]; then
+    # Use explicit override
+  else
+    FILE_COUNT=$(count distinct files mentioned in task IN SCOPE list)
+    if [ "$FILE_COUNT" -le 1 ] && (task has <20 lines change indication or single-function scope); then
+      TIER="trivial"
+    elif [ "$FILE_COUNT" -le 3 ]; then
+      TIER="small"
+    elif [ "$FILE_COUNT" -le 6 ]; then
+      TIER="medium"
+    else
+      TIER="large"
+    fi
+    # Also force large if: "architectural", "refactor across", "schema change", "migrate", "7+ files"
+  fi
+  TIER_ASSIGNMENTS["step-XX"]=$TIER
+```
+
+**Large tier indicator keywords:** architectural, refactor across, schema change, database migration, cross-cutting concern, 7+ files, redesign, overhaul.
+
+Store tier assignments in `${RUN_DIR}/forge-status.json` as:
+```json
+"tier_assignments": {
+  "step-01": "medium",
+  "step-02": "small",
+  "step-03": "trivial"
+}
+```
+
+### Step 6d: Environment Constraint Check
+
+For each Codex-assigned task, scan the task description (from the plan) for host-access ACTION markers — verbs/phrases that require resources Codex's sandbox cannot access.
+
+**Host-access markers (action verbs, not nouns):**
+- Docker runtime: `docker cp`, `docker exec`, `docker run`, `docker compose up`, `docker restart`, `docker build` (NOT "Dockerfile" or "docker image" as nouns — those are file edits Codex can handle)
+- Network APIs: `curl`, `httpGet`, `fetch(`, `wget`, API endpoint URL patterns (`http://`, `https://`), `grafana`, `prometheus`
+- SSH/Remote: `ssh `, `scp `, `rsync`, `remote host`, IP addresses (`192.168.`, `10.0.`)
+- Secrets management: `op item`, `op read`, `op run`, `op inject` (NOT `op://` URI strings — those are references Codex can write as literals)
+- System: `systemctl`, `journalctl`, `crontab`, `mount`
+- Interactive verification: `heartbeat`, `smoke test`, `manual verification`, `e2e test`, `run the service`
+
+**Logic:**
+
+```
+for each Codex-assigned step:
+  scan task text (from plan) for host-access markers (case-insensitive)
+  if ANY marker found:
+    reassign worker: codex → builder
+    set model: sonnet (safe default for formerly-codex tasks)
+    print: "⚠️ step-XX reassigned codex→builder (requires host access: <matched marker>)"
+    update worker_assignments and model_assignments in forge-status.json
+```
+
+**Print reassignment table** (only if any reassignments occurred):
+
+```
+Environment Constraint Check:
+Step  Marker Found           Action
+──────────────────────────────────────────────
+02    docker cp               reassigned → builder (sonnet)
+04    op item, service account reassigned → builder (sonnet)
+06    heartbeat, smoke test   reassigned → builder (sonnet)
+```
+
+If no reassignments: `Environment check: all Codex tasks compatible with sandbox.`
 
 ### Step 7: Detect Verification Commands
 
@@ -354,6 +482,17 @@ Write TWO files using the `RUN_ID` and `RUN_DIR` established in Step 3:
     "step-01": "codex|builder",
     "step-02": "codex|builder"
   },
+  "model_assignments": {
+    "step-02": "sonnet|opus"
+  },
+  "task_types": {
+    "step-01": "devops/scripts",
+    "step-02": "implementation"
+  },
+  "tier_assignments": {
+    "step-01": "medium",
+    "step-02": "small"
+  },
   "parallel_groups": [[1], [2], [3]],
   "task_scopes": {},
   "gates": {
@@ -398,7 +537,17 @@ If `--no-simplify` was passed as an argument, set `"simplify": false` in the gen
 - [x] [RUN_DIR]/forge-status.json (full status)
 
 ### Worker Assignments
-[table from Step 6]
+[table from Step 6, with Tier, Model, and Type columns]
+
+```
+Worker Assignments:
+Step  Worker   Model    Tier      Type              Task
+────────────────────────────────────────────────────────────────
+01    codex    —        small     devops/scripts    Write deploy script
+02    codex    —        medium    implementation    Create user model
+03    builder  opus     large     security          Add auth middleware
+04    codex    —        small     api-integration   Wire up payment endpoint
+```
 
 ### Verification Gates
 | Gate | Command | Status |

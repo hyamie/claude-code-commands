@@ -10,8 +10,9 @@ HMFIC orchestrates. Workers (Codex + Builder) implement via frozen task.md files
 
 **Key differences from /smoke and /turbo:**
 - Per-step task.md → worker → verify loop (not phase-level)
-- Codex for code implementation, Builder for config/MCP tasks
+- Model-aware workers: Codex for trivial/small-scripts, Builder (sonnet/opus) by tier+type matrix
 - Artifact-based contract (status.json, summary.md, raw.log)
+- Dual per-step review for medium+ tiers (Claude opposite-model + Codex adversarial)
 - 2-3 end-of-run reviewers (Claude correctness + Codex implementation + conditional final)
 - Objective gates (bash) before AI review
 
@@ -118,6 +119,27 @@ fi
 mkdir -p "artifacts/${RUN_ID}"
 echo "Forge run ${RUN_ID} initialized"
 
+# Create TASK_NOTES.md for cross-step context bridging
+TASK_NOTES="${RUN_DIR}/TASK_NOTES.md"
+if [ ! -f "$TASK_NOTES" ]; then
+  cat > "$TASK_NOTES" <<'EOF'
+# TASK_NOTES.md — Cross-Step Context
+
+Each step reads this file at start for shared context.
+Each step appends findings, decisions, or blockers before finishing.
+
+## Convention
+- Read before starting your step — another step may have left useful context
+- Append your findings at the end under `## Step XX Notes`
+- Keep entries brief: discoveries, gotchas, decisions made, blockers encountered
+- If your step runs inside a container or restricted environment, document available tools:
+  `## Runtime: <env name> — has: node, jq | missing: python3, yq, docker CLI`
+
+---
+EOF
+  echo "Created ${TASK_NOTES}"
+fi
+
 # Set started_at on first run (null means not yet started)
 STARTED_AT=$(jq -r '.started_at // empty' "${RUN_DIR}/forge-status.json")
 if [ -z "$STARTED_AT" ]; then
@@ -161,16 +183,20 @@ Write `task.md` to the artifact path. Use this template — fill in from the pla
 # Step XX — <short title from plan task>
 
 ## Context
-- Working directory: <REPO_PATH absolute, e.g. /home/user/projects/active/my-project>
+- Working directory: <REPO_PATH absolute, e.g. /home/user/projects/my-project>
 - Plan file: <REPO_PATH>/<PLAN_FILE>
 - PRD: <REPO_PATH>/<PRD_FILE or "None">
 - Acceptance: <REPO_PATH>/${RUN_DIR}/ACCEPTANCE.md
 - Decisions: <REPO_PATH>/${RUN_DIR}/DECISIONS.md
+- Task notes: <REPO_PATH>/${RUN_DIR}/TASK_NOTES.md
 - Run: <RUN_ID>
 - Step: <STEP_ID>
 
 IMPORTANT: cd to <REPO_PATH> before any file operations.
 NOTE: Do NOT read files from ~/.agents/skills/ or ~/.claude/skills/
+NOTE: Read TASK_NOTES.md before starting — previous steps may have left relevant context. Read the most recent HANDOFF section (if present) for context from the immediately preceding step. Append your findings under "## <STEP_ID> Notes" before finishing.
+NOTE: Before completing, append a HANDOFF section to TASK_NOTES.md using the template at .claude/templates/handoff.md — fill in Context, Files Modified, Decisions Made, Open Questions, and Warnings.
+NOTE: If you discover that your execution environment lacks expected tools (python3, yq, etc.), document this in TASK_NOTES.md under "## Runtime" so downstream steps can adapt.
 
 ## Objective
 <one sentence derived from the plan task>
@@ -207,19 +233,35 @@ Codex does NOT write artifacts — it only implements code and runs verification
 
 **CRITICAL:** All paths in task.md MUST be absolute (Codex runs in a different directory). Use `${REPO_PATH}` prefix for every file reference.
 
-#### 2b. Determine Worker
+#### 2b. Determine Worker and Model
 
-Read worker assignment from `${RUN_DIR}/forge-status.json`:
+Read worker, model, and tier assignment from `${RUN_DIR}/forge-status.json`:
 ```bash
 WORKER=$(jq -r ".worker_assignments.\"${STEP_ID}\"" "${RUN_DIR}/forge-status.json")
+BUILDER_MODEL=$(jq -r ".model_assignments.\"${STEP_ID}\" // \"sonnet\"" "${RUN_DIR}/forge-status.json")
+TIER=$(jq -r ".tier_assignments.\"${STEP_ID}\" // \"medium\"" "${RUN_DIR}/forge-status.json")
 ```
 
-If not assigned, use keyword heuristics:
+If worker not assigned, fall back to keyword heuristics:
 - Code keywords (create, implement, write, build, add, refactor, fix, test, function, class, module, endpoint, API, migration, schema) → `codex`
 - Config keywords (configure, setup, config, MCP, deploy, environment, secret, credential, hook, skill, command, documentation) → `builder`
 - Default → `codex`
 
+**Model is used ONLY for builder workers.** Codex uses its own model internally.
+
 #### 2c. Capture Base SHA and Spawn Worker
+
+**CRITICAL — HMFIC EXECUTION BAN:**
+The HMFIC (you, the orchestrator) must NEVER execute step work directly. Your role
+is orchestration ONLY — spawning workers, reading status.json, making routing decisions.
+
+If a Codex worker fails and walk-away mode triggers Builder fallback:
+- You MUST spawn a Builder agent via the Agent tool
+- You MUST NOT implement the step yourself
+- You MUST NOT write status.json with agent:"hmfic-direct"
+
+This is non-negotiable. "hmfic-direct" in any status.json is a protocol violation.
+The Builder agent has full Bash/tool access and can handle Docker, APIs, SSH, etc.
 
 Capture the current HEAD before the worker runs — used for accurate diffs in review:
 ```bash
@@ -236,14 +278,31 @@ STEP_BASE_SHA=$(git rev-parse HEAD)
 
 **If worker = codex:**
 
-Run forge-codex.sh via Bash tool (background):
+Determine expect_changes from task type before calling the wrapper:
+
+```bash
+# Determine expect_changes from task type
+TASK_TYPE=$(jq -r ".task_types.\"${STEP_ID}\" // \"implementation\"" "${RUN_DIR}/forge-status.json")
+case "$TASK_TYPE" in
+  devops/scripts|test|infra|deploy|documentation)
+    CODEX_EXPECT_CHANGES="false"
+    ;;
+  *)
+    CODEX_EXPECT_CHANGES="true"
+    ;;
+esac
+```
+
+Run forge-codex.sh via Bash tool (background). Pass tier for timeout calculation:
 
 ```bash
 bash ~/claude-env/scripts/forge-codex.sh \
   "${REPO_PATH}" \
   "${ARTIFACT_PATH}" \
   "${ARTIFACT_PATH}/task.md" \
-  900
+  0 \
+  "${CODEX_EXPECT_CHANGES}" \
+  "${TIER}"
 ```
 
 **CONTEXT DISCIPLINE:** Ignore all stdout except the final `DONE step=... pass=...` line. Do NOT read raw.log, codex-output.md, or summary.md. The worker wrote everything to disk — you already know the path.
@@ -275,10 +334,11 @@ After user picks:
 
 **If worker = builder:**
 
-Spawn a Builder agent via Task tool:
+Spawn a Builder agent via Task tool. Pass `BUILDER_MODEL` from step 2b:
 
 ```
 subagent_type: "builder"
+model: BUILDER_MODEL   # "sonnet" or "opus" from model_assignments
 prompt: |
   You are implementing ONE step of a /forge run. Scope is ONLY what task.md describes.
 
@@ -354,15 +414,147 @@ Options:
 - Modify the plan and re-run /forge-prep
 ```
 
+#### 2d-sloppify. De-Sloppify Pass
+
+**Distinct from 2e-simplify:** De-sloppify removes bad patterns (slop). Code simplification (2e-simplify) improves code quality. Do both — they're different passes.
+
+After worker passes (pass=true from step 2d), check tier and code files before review:
+
+```bash
+STEP_TIER=$(jq -r ".tier_assignments.\"${STEP_ID}\" // \"medium\"" "${RUN_DIR}/forge-status.json")
+if [ "$STEP_TIER" = "trivial" ]; then
+  echo "Tier=${STEP_TIER} — skipping de-sloppify"
+  # Skip to step 2e
+fi
+
+CHANGED_FILES=$(git diff --name-only ${STEP_BASE_SHA} -- . ':!artifacts/' | grep -E '\.(ts|tsx|js|jsx|py|go|rs|java|rb|sh|css|scss)$' || true)
+if [ -z "$CHANGED_FILES" ]; then
+  echo "No code files changed in ${STEP_ID} — skipping de-sloppify"
+  # Skip to step 2e
+fi
+```
+
+If code files exist, spawn the de-sloppify agent:
+
+```bash
+mkdir -p "${ARTIFACT_PATH}/desloppify"
+```
+
+```
+subagent_type: "builder"
+model: "sonnet"
+prompt: |
+  You are removing slop patterns from ONE step of a /forge run. Do NOT add features.
+
+  WORKING DIRECTORY: {REPO_PATH}
+  RUN: {RUN_ID}, STEP: {STEP_ID}
+
+  SCOPE — ONLY these files (changed in this step):
+  {CHANGED_FILES — one per line}
+
+  BUDGET: Complete within 10 tool calls. Read files, remove slop, return.
+
+  SLOP PATTERNS TO REMOVE:
+  - Tests that only verify language/framework behavior (e.g., testing that Array.map works)
+  - Redundant type checks (already enforced by TypeScript/type hints)
+  - Over-defensive error handling (catching errors that can't happen in context)
+  - console.log / print / fmt.Println debug statements left in code
+  - Commented-out code blocks
+  - Unnecessary abstractions (wrapper functions that add no value)
+  - Overly verbose variable names that hurt readability (e.g., `theUserObjectFromDatabase`)
+
+  RULES:
+  - PRESERVE ALL FUNCTIONALITY. Do not change behavior.
+  - Do NOT add features or expand scope.
+  - Do NOT touch files outside the list above.
+  - Do NOT modify files in artifacts/.
+  - If no slop patterns are found, leave the file alone (do NOT make changes just to have output).
+
+  Write to {ARTIFACT_PATH}/desloppify/status.json:
+  {"agent":"builder", "task_type":"desloppify", "pass": true, "blocking_issues": [], "warnings": [], "files_cleaned": [...]}
+
+  YOUR FINAL MESSAGE must be ONLY this line, nothing else:
+  DONE step={STEP_ID} pass=true
+```
+
+**CONTEXT DISCIPLINE:** Read ONLY `{ARTIFACT_PATH}/desloppify/status.json`. If it's missing, treat as no-op (don't block on desloppify failure). Proceed to step 2e.
+
 #### 2e. Spawn Per-Step Verifier
 
 **MANDATORY — DO NOT SKIP. Every step MUST be verified before committing.**
 
-After worker passes, spawn a Reviewer agent:
+**Check tier before spawning reviewer:**
+
+```bash
+STEP_TIER=$(jq -r ".tier_assignments.\"${STEP_ID}\" // \"medium\"" "${RUN_DIR}/forge-status.json")
+if [ "$STEP_TIER" = "trivial" ] || [ "$STEP_TIER" = "small" ]; then
+  # Check if step modified high-risk file types that warrant review even at low tiers
+  HIGH_RISK_MODIFIED=$(git diff --name-only ${STEP_BASE_SHA} -- . ':!artifacts/' | \
+    grep -iE '(prompt|config|mapping|alert|grafana|escalat|routing)\.(md|yaml|yml|json)$' || true)
+  NEW_SCRIPTS=$(git diff --name-only ${STEP_BASE_SHA} -- . ':!artifacts/' | \
+    grep -E '\.(sh|js|mjs|py)$' | while read f; do
+      git show "${STEP_BASE_SHA}:$f" >/dev/null 2>&1 || echo "$f"
+    done || true)
+
+  if [ -n "$HIGH_RISK_MODIFIED" ] || [ -n "$NEW_SCRIPTS" ]; then
+    echo "Tier=${STEP_TIER} but high-risk files modified — running lightweight review"
+    echo "High-risk files: ${HIGH_RISK_MODIFIED} ${NEW_SCRIPTS}"
+    # Fall through to spawn a SINGLE lightweight reviewer below (not dual review)
+  else
+    echo "Tier=${STEP_TIER} — skipping AI review (proceeding to 2e-simplify)"
+    # Write a pass-through review stub so 2f's pre-commit guard doesn't block
+    mkdir -p "${ARTIFACT_PATH}/review"
+    echo '{"agent":"reviewer","task_type":"review","pass":true,"blocking_issues":[],"warnings":["AI review skipped — tier='${STEP_TIER}'"]}' > "${ARTIFACT_PATH}/review/status.json"
+    # Skip to step 2e-simplify
+  fi
+fi
+```
+
+**When the high-risk trigger fires for trivial/small tiers**, spawn a single lightweight reviewer (NOT dual review):
 
 ```
 subagent_type: "reviewer"
 model: "sonnet"
+prompt: |
+  Lightweight review for a small-tier step that modified high-risk files.
+  Focus ONLY on: correctness of prompt logic, config validity, script error handling.
+  Do NOT flag style, naming, or minor issues.
+  BUDGET: 10 tool calls max.
+
+  Read:
+  - {ARTIFACT_PATH}/task.md
+  - {ARTIFACT_PATH}/status.json
+  - Changed files: git diff {STEP_BASE_SHA} --name-only
+
+  Write to {ARTIFACT_PATH}/review/:
+  - status.json: {"agent":"reviewer","task_type":"review","pass":true/false,"blocking_issues":[],"warnings":[]}
+  - review.md (findings only — keep brief)
+
+  YOUR FINAL MESSAGE must be ONLY: DONE step={STEP_ID} pass=<true|false>
+```
+
+Process the lightweight review result the same as the standard reviewer: `pass=false` enters the fix loop, `pass=true` proceeds to 2e-simplify.
+
+After worker passes, spawn review agent(s). **The review approach depends on tier:**
+
+**For medium and large tiers — Dual Parallel Review:**
+
+Determine the review model (opposite of builder):
+```bash
+if [ "$BUILDER_MODEL" = "opus" ]; then
+  REVIEW_MODEL="sonnet"
+else
+  REVIEW_MODEL="opus"
+fi
+```
+
+Launch BOTH reviews in parallel (single message, two tool calls):
+
+**1. Claude Reviewer** (Agent tool):
+
+```
+subagent_type: "reviewer"
+model: REVIEW_MODEL   # opposite of builder model
 prompt: |
   You are verifying ONE step of a /forge run. Do NOT implement anything.
 
@@ -395,12 +587,84 @@ prompt: |
   DONE step={STEP_ID} pass=<true|false>
 ```
 
+**2. Codex Adversarial Review** (Bash tool, background):
+
+```bash
+COMPANION="$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)"
+mkdir -p "${ARTIFACT_PATH}/codex-review"
+node "$COMPANION" adversarial-review \
+  --base "$STEP_BASE_SHA" \
+  --scope working-tree \
+  --cwd "$REPO_PATH" \
+  --json \
+  "Focus on: edge cases, error handling gaps, missing validation, race conditions" \
+  > "${ARTIFACT_PATH}/codex-review/output.json" 2>"${ARTIFACT_PATH}/codex-review/raw.log"
+```
+
+**Dual review gate logic:**
+- If Claude Reviewer returns `pass: false` → step fails, enter fix loop
+- If Codex adversarial-review finds P0/P1 issues → step fails, enter fix loop
+- If both pass → proceed to commit
+- Codex review warnings (P2+) are logged but don't block
+- If Codex adversarial-review fails to run (exit error) → log warning, continue with Claude review only
+
+**For medium tiers where worker was codex (no BUILDER_MODEL):**
+Use `REVIEW_MODEL="sonnet"` as default for the Claude reviewer.
+
+---
+
 **CONTEXT DISCIPLINE:** The Reviewer's return message will be one line. Read ONLY `{ARTIFACT_PATH}/review/status.json` for pass/fail. Do NOT read review.md here — it's for the final Ship phase.
 
 **DO NOT BATCH OR SKIP:** Each step gets its own reviewer invocation. Never combine multiple steps into one review. Never skip review because "it looks fine." The pre-commit guard in step 2f will block the commit if review artifacts are missing.
 
-- **pass=true** → commit step, mark task `[x]` in plan, advance to next step
-- **pass=false** → create fix step from review findings, re-execute (same circuit breaker)
+- **pass=true** (both reviewers) → continue to large-tier check (below), then 2e-simplify
+- **pass=false** (either reviewer) → create fix step from review findings, re-execute (same circuit breaker)
+
+**Large-tier architecture review (when review passes):**
+
+```bash
+STEP_TIER=$(jq -r ".tier_assignments.\"${STEP_ID}\" // \"medium\"" "${RUN_DIR}/forge-status.json")
+if [ "$STEP_TIER" = "large" ]; then
+  echo "Tier=large — spawning architecture review pass"
+```
+
+```
+subagent_type: "reviewer"
+model: "sonnet"
+prompt: |
+  You are doing an ARCHITECTURE review for a large-tier step in a /forge run.
+  This is a SECOND review pass focused specifically on architecture concerns.
+
+  WORKING DIRECTORY: {REPO_PATH}
+  RUN: {RUN_ID}, STEP: {STEP_ID}
+
+  Read:
+  - {ARTIFACT_PATH}/task.md
+  - {ARTIFACT_PATH}/review/review.md (first pass findings, for context)
+  - Changed files from: git diff {STEP_BASE_SHA} --name-only
+
+  BUDGET: Complete within 10 tool calls.
+
+  ARCHITECTURE CHECKLIST:
+  1. COUPLING: Does this change increase tight coupling between components?
+  2. ABSTRACTIONS: Are new abstractions justified, or is this premature generalization?
+  3. BOUNDARIES: Does the change respect existing module/layer boundaries?
+  4. REVERSIBILITY: How hard is it to undo this change if needed?
+  5. SCALE: Will this approach hold up under 10x load or data growth?
+
+  Write to {ARTIFACT_PATH}/review-arch/:
+  - status.json: {"agent":"reviewer","task_type":"review-arch","pass":true,"blocking_issues":[],"warnings":[]}
+  - review-arch.md (Architecture Gate: PASS/FAIL, findings per checklist item)
+
+  YOUR FINAL MESSAGE must be ONLY this line, nothing else:
+  DONE step={STEP_ID}-arch pass=<true|false>
+```
+
+```bash
+fi  # end large-tier check
+```
+
+Read `{ARTIFACT_PATH}/review-arch/status.json`. If `pass=false`, treat blocking_issues the same as standard reviewer failures (create fix step, re-execute). If directory is absent (non-large tier), skip silently.
 
 #### 2e-simplify. Code Simplification Pass (Optional)
 
@@ -410,9 +674,15 @@ prompt: |
 SIMPLIFY=$(jq -r '.simplify // true' "${RUN_DIR}/forge-status.json")
 SIMPLIFY_FAILURES=$(jq -r '.simplify_failures // 0' "${RUN_DIR}/forge-status.json")
 SIMPLIFY_CB=$(jq -r '.simplify_circuit_breaker // 2' "${RUN_DIR}/forge-status.json")
+STEP_TIER=$(jq -r ".tier_assignments.\"${STEP_ID}\" // \"medium\"" "${RUN_DIR}/forge-status.json")
 
 if [ "$SIMPLIFY" != "true" ] || [ "$SIMPLIFY_FAILURES" -ge "$SIMPLIFY_CB" ]; then
   echo "Simplification disabled (simplify=${SIMPLIFY}, failures=${SIMPLIFY_FAILURES}/${SIMPLIFY_CB}) — skipping to commit"
+  # Skip to step 2f
+fi
+
+if [ "$STEP_TIER" = "trivial" ]; then
+  echo "Tier=trivial — skipping simplification"
   # Skip to step 2f
 fi
 ```
@@ -563,6 +833,12 @@ if [ -f "${ARTIFACT_PATH}/simplify/status.json" ]; then
   echo "Simplification: pass=${SIMPLIFY_PASS}, files=${SIMPLIFY_FILES}"
 fi
 
+# Ensure worker appended HANDOFF section to TASK_NOTES.md (see task.md NOTE)
+# If not present, the next step will proceed without handoff context (non-blocking)
+if ! grep -q "^## HANDOFF:" "${RUN_DIR}/TASK_NOTES.md" 2>/dev/null; then
+  echo "WARNING: No HANDOFF section found in TASK_NOTES.md for ${STEP_ID}. Worker may have skipped it."
+fi
+
 git add -- . ':!artifacts/'
 git commit -m "$(cat <<'EOF'
 feat(forge): {STEP_ID} — {short task title}
@@ -667,6 +943,11 @@ Custom gates follow the same pass/fail/fix logic as built-in gates (including co
 
 **On gate failure:**
 - Display failing gate and output
+- **Build/compilation error fallback:** If the gate failed due to a build or compilation error:
+  1. Invoke the build-error-resolver agent on the failing files
+  2. Re-run the failing gate
+  3. If the gate passes after build-error-resolver, continue normally
+  4. If still failing, proceed to the normal fix-step cycle below
 - Create a fix step targeting the failure
 - Loop back to Step 2 (execute fix, re-verify, then re-run gates)
 - Circuit breaker: max 3 gate-fix cycles → HALT
@@ -749,11 +1030,36 @@ bash ~/claude-env/scripts/forge-codex.sh \
   "${REPO_PATH}" \
   "artifacts/${RUN_ID}/final-review/implementation" \
   "artifacts/${RUN_ID}/final-review/implementation/task.md" \
-  300 \
-  false
+  0 \
+  false \
+  small
 ```
+Note: $4 (timeout) is legacy/ignored — tier controls timeout. `small` = 10 min, appropriate for review.
 
 **If Codex wrapper fails for review:** Skip Codex review, continue with Claude review only. Print warning.
+
+**Security Review (conditional):**
+
+For security-sensitive steps (auth, crypto, API endpoints, file I/O, user input handling, dependency changes), also invoke the security-reviewer agent:
+
+```
+subagent_type: "security-reviewer"
+prompt: |
+  Review security-sensitive changes from forge run {RUN_ID}.
+
+  Run: git diff {BASE_BRANCH}...HEAD -- <security-sensitive files>
+  Read: {REPO_PATH}/${RUN_DIR}/ACCEPTANCE.md
+
+  Flag CRITICAL and HIGH severity findings only. Do NOT flag style or low-severity issues.
+
+  Write to artifacts/{RUN_ID}/final-review/security/:
+  - status.json (agent:"security-reviewer", task_type:"review", pass, blocking_issues)
+  - review.md (OWASP category, severity, finding, recommendation)
+
+  Return: DONE step=final-security pass=<true|false>
+```
+
+Add CRITICAL security findings to the fix step list alongside other reviewer findings. WARNING-level findings go in the summary report but do not block shipping.
 
 #### Parse Review Results
 
@@ -931,7 +1237,7 @@ forge-status.json is updated after every step, so no progress is lost.
 | Feature | Description |
 |---------|-------------|
 | **Clean tree enforcement** | Dirty working tree blocked at forge start |
-| **Per-step verification** | Every step gets a fresh Reviewer before advancing |
+| **Per-step verification** | medium+ tiers get dual review (Claude opposite-model + Codex adversarial) |
 | **Circuit breaker** | Max 3 retries per step, max 3 gate-fix cycles, max 3 review-fix cycles |
 | **Artifact contract** | Workers write to disk, HMFIC reads only status lines |
 | **Codex fallback** | Walk-away: auto-Builder + log. Attended: AskUserQuestion with 4 options |

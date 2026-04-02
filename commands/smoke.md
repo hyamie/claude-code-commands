@@ -131,8 +131,19 @@ For each task in the plan:
 
 1. **Announce task** (brief overview)
 2. **Implement all checkboxes** in current task section
-3. **Run validation** (test/lint commands from plan)
+3. **De-Sloppify Pass** — review all changes from this task and clean up:
+   - Tests that check language/framework behavior (not your code)
+   - Redundant type checks (e.g. `if x is None` after already asserting)
+   - Over-defensive error handling with no real recovery path
+   - `console.log` / `print` debug statements
+   - Commented-out code
+   - Unnecessary abstractions introduced during implementation
+4. **Run validation** (test/lint commands from plan)
 4. **Fix failures** until validation passes
+   - **Build/compilation error fallback:** If validation fails with a build or compilation error:
+     1. Invoke the build-error-resolver agent on the failing files
+     2. Re-run validation
+     3. If still failing after build-error-resolver, proceed with the normal fix cycle
 5. **Commit:** `git commit -m "feat: <task description>"`
 6. **Update plan:** `[ ]` → `[x]`
 7. **Signal:**

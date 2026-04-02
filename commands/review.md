@@ -5,7 +5,7 @@ description: Multi-model code review pipeline (Claude + Codex)
 
 # /review
 
-Run a multi-model code review pipeline with parallel reviewers (Claude + Codex), verifier agents, and a synthesized report from verified findings only.
+Run a multi-model code review pipeline: Claude reviewer agent + Codex CLI in parallel, verified findings, synthesized report.
 
 ## Usage
 
@@ -20,86 +20,31 @@ Run a multi-model code review pipeline with parallel reviewers (Claude + Codex),
 /review src/ --focus security    # Combined arguments
 ```
 
-## Pipeline Contract
+## Pipeline
 
-1. Parse arguments and resolve scope.
-2. Build `REVIEW_ID` + `brief.md` under `.claude/reviews/{REVIEW_ID}/`.
-3. Spawn Claude reviewer and Codex reviewer in parallel.
-4. Spawn two verifiers in parallel after both reviewers complete.
-5. Synthesize report from verified outputs only (never raw review files).
-6. Present categorized report and offer `/plan` generation.
-
-## 1) Argument Parsing
-
-Parse tokens from `$ARGUMENTS` with this behavior:
-
-```bash
-FOCUS="all"
-MODE="all"          # all | staged | diff
-DIFF_BASE=""
-SCOPE_INPUTS=()
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --focus)
-      [ -n "${2:-}" ] || { echo "ERROR: --focus requires a value"; exit 1; }
-      FOCUS="$2"
-      shift 2
-      ;;
-    --staged)
-      MODE="staged"
-      shift
-      ;;
-    --diff)
-      [ -n "${2:-}" ] || { echo "ERROR: --diff requires a branch"; exit 1; }
-      MODE="diff"
-      DIFF_BASE="$2"
-      shift 2
-      ;;
-    --*)
-      echo "ERROR: Unknown flag $1"
-      exit 1
-      ;;
-    *)
-      SCOPE_INPUTS+=("$1")
-      shift
-      ;;
-  esac
-done
+```
+Parse args → Create review dir + brief → Launch Claude + Codex in parallel → Verify findings → Synthesize report
 ```
 
-Scope resolution rules:
+## Step 1: Parse Arguments
 
-- If `MODE=staged`: `git diff --name-only --cached`
-- If `MODE=diff`: `git diff --name-only "${DIFF_BASE}..HEAD"`
-- Else with no positional scope: `git ls-files`
-- Else positional scope values:
-  - Directory: `git ls-files -- "<dir>"`
-  - File: include file directly
-  - Pathspec fallback: `git ls-files -- "<pattern>"`
-- Deduplicate and keep only existing files.
+Parse `$ARGUMENTS`:
 
-If resulting scope has `>100` files:
+- `--focus <area>`: refactor, security, performance, architecture, smells, or all (default: all)
+- `--staged`: Review staged changes only
+- `--diff <branch>`: Review changes vs branch
+- Positional args: files/directories to scope
 
-- Warn user that scope is large.
-- Continue only after explicitly noting recommendation to narrow scope.
+Resolve scope:
+- `--staged` → `git diff --name-only --cached`
+- `--diff <branch>` → `git diff --name-only "<branch>..HEAD"`
+- Directory arg → `git ls-files -- "<dir>"`
+- File arg → include directly
+- No args → `git ls-files`
 
-## 2) Focus Presets
+Warn if >100 files but continue.
 
-Map `--focus` to review emphasis:
-
-- `refactor`: code smells, duplication, complex functions, naming, dead code, extraction opportunities
-- `security`: OWASP top 10, injection, auth issues, secrets, input validation, error exposure
-- `performance`: N+1 queries, unnecessary allocations, missing indexes, caching opportunities, hot paths
-- `architecture`: coupling, cohesion, dependency direction, layer violations, abstraction levels
-- `smells`: long methods, god classes, feature envy, shotgun surgery, primitive obsession
-- default (`all`): balanced across all categories
-
-Reject unknown focus values with a clear error message listing valid presets.
-
-## 3) Generate `REVIEW_ID` and `brief.md`
-
-Create incrementing review ID format: `review-YYYY-MM-DD-NNN`.
+## Step 2: Create Review Directory and Brief
 
 ```bash
 TODAY="$(date +%F)"
@@ -111,141 +56,81 @@ REVIEW_DIR=".claude/reviews/${REVIEW_ID}"
 mkdir -p "${REVIEW_DIR}/claude" "${REVIEW_DIR}/codex" "${REVIEW_DIR}/verified"
 ```
 
-Write `${REVIEW_DIR}/brief.md` with:
+Write `${REVIEW_DIR}/brief.md` containing:
+- Scope mode and inputs
+- Focus area description
+- File listing with line counts
+- Project context from CLAUDE.md
+- Branch name and recent commits (8)
 
-- Scope mode (`all`, `staged`, `diff`) and explicit scope inputs
-- Focus area and emphasis description
-- File listing with line counts (`wc -l`) for every file in scope
-- Project context from `CLAUDE.md` (tech stack, standards, conventions)
-- Git context:
-  - branch: `git rev-parse --abbrev-ref HEAD`
-  - recent commits: `git log --oneline -n 8`
+## Step 3: Launch Reviewers in Parallel
 
-## 4) Spawn Review Workers (Parallel)
+Check if Codex is available: `command -v codex`. If not, skip Codex and note degradation.
 
-Launch both workers concurrently.
+Launch BOTH in parallel (same message, two tool calls):
 
-### Worker A: Claude Reviewer (Task tool)
+### Worker A: Claude Reviewer (Agent tool)
 
-Use Task tool with:
+```
+subagent_type: "reviewer"
+run_in_background: true
+```
 
-- `subagent_type: "reviewer"`
-- Prompt requirements:
-  - Read `${REVIEW_DIR}/brief.md`
-  - Read all scoped files
-  - Analyze according to selected focus emphasis
-  - Write `${REVIEW_DIR}/claude/review.md` with structured findings
-  - Each finding must include:
-    - severity (`critical` | `major` | `minor`)
-    - `file:line`
-    - description
-    - suggested fix
-  - Write `${REVIEW_DIR}/claude/status.json`:
-    - `{"pass": true, "finding_count": N, "agent": "claude-reviewer"}`
-  - Return one summary line with counts by severity
-
-When this worker completes, emit:
-
-- `<<<CLAUDE_REVIEW_DONE>>>`
-
-If Claude reviewer fails:
-
-- Retry exactly once.
-- If retry fails, continue with Codex-only results and note degradation in final report.
+Prompt the reviewer agent to:
+1. Read `${REVIEW_DIR}/brief.md`
+2. Read all scoped files
+3. Analyze according to focus emphasis
+4. Write `${REVIEW_DIR}/claude/review.md` with structured findings:
+   - Each finding: severity (critical|major|minor), file:line, description, suggested fix
+5. Write `${REVIEW_DIR}/claude/status.json`: `{"pass": true/false, "finding_count": N, "agent": "claude-reviewer"}`
+6. Return summary line with counts by severity
 
 ### Worker B: Codex Reviewer (Bash tool)
 
-Run:
-
-```bash
-bash scripts/review-codex.sh \
-  "$PWD" \
-  "${REVIEW_DIR}/codex" \
-  "${REVIEW_DIR}/brief.md" \
-  600
+```
+run_in_background: true
 ```
 
-HMFIC reads only the wrapper DONE line:
+Run:
+```bash
+bash scripts/review-codex.sh "$PWD" "${REVIEW_DIR}/codex" "${REVIEW_DIR}/brief.md" 600
+```
 
-- `DONE review=codex pass=<bool> findings=<N> artifacts=<path>/`
+Wait for both to complete. If Codex fails/times out, continue Claude-only with degradation note.
 
-When Codex worker completes, emit:
+## Step 4: Verify Findings
 
-- `<<<CODEX_REVIEW_DONE>>>`
+After BOTH workers complete, launch verifier agent(s) via Agent tool.
 
-Codex degradations:
+Only launch verifiers for models that produced review files:
+- If Claude review exists → launch Verifier A
+- If Codex review exists → launch Verifier B
+- Launch available verifiers in parallel
 
-- If Codex times out/fails, continue with Claude-only results and record warning.
-- If Codex is not installed (`command -v codex` fails), skip Codex worker and continue with Claude-only results with warning.
-
-## 5) Spawn Verifiers (Parallel, after both workers)
-
-After worker phase is finished (including any fallback), launch verifiers via Task tool.
-
-- If both Claude and Codex produced reviews, launch two verifiers in parallel.
-- If Codex was unavailable, failed, or skipped, launch only Verifier 1 (Claude findings). Do NOT spawn Verifier 2.
-
-Verifier settings for both:
-
-- `subagent_type: "general-purpose"`
-- `model: "sonnet"`
-- Each verifier gets only one raw review file + code access; verifiers do not read the other model review.
-
-### Verifier 1 (Claude findings)
-
-Input: `${REVIEW_DIR}/claude/review.md`
-
-Tasks:
-
-1. For each finding, open referenced `file:line` and inspect ~20 lines of context.
-2. Confirm finding is real (not hallucinated, not already fixed, file/line exists).
-3. Confirm severity is appropriate.
-4. Write only confirmed findings to `${REVIEW_DIR}/verified/claude.md`.
+Each verifier (subagent_type: "general-purpose"):
+1. Read the single review file assigned to it
+2. For each finding, open referenced file:line and check ~20 lines of context
+3. Confirm finding is real (not hallucinated, file/line exists, issue present)
+4. Write confirmed findings to `${REVIEW_DIR}/verified/claude.md` or `${REVIEW_DIR}/verified/codex.md`
 5. Return: `VERIFIED: X of Y findings confirmed (Z rejected as false positives)`
 
-### Verifier 2 (Codex findings) — only if Codex review exists
+If a verifier rejects >80% of findings, flag as "High false positive rate".
 
-Input: `${REVIEW_DIR}/codex/review.md`
+## Step 5: Synthesize Report
 
-Skip this verifier entirely if Codex was unavailable, failed, or produced no review file.
-
-Tasks and return format are identical; output file:
-
-- `${REVIEW_DIR}/verified/codex.md`
-
-After all verifiers complete, emit:
-
-- `<<<VERIFICATION_DONE>>>`
-
-If a verifier rejects more than 80% of a model's findings, flag in the report: `High false positive rate`.
-
-## 6) HMFIC Synthesis (Verified Inputs Only)
-
-HMFIC must read only:
-
-- `${REVIEW_DIR}/verified/claude.md`
-- `${REVIEW_DIR}/verified/codex.md`
-
-HMFIC must not read:
-
-- `${REVIEW_DIR}/claude/review.md`
-- `${REVIEW_DIR}/codex/review.md`
+Read ONLY verified files (`${REVIEW_DIR}/verified/*.md`), NEVER raw review files.
 
 Synthesis rules:
+1. Deduplicate by same root issue at same file:line
+2. Tag provenance: `found by: Claude`, `found by: Codex`, or `found by: Claude + Codex`
+3. Order: Critical → Major → Minor
+4. Group by file within each severity
 
-1. Deduplicate issues by same root issue at same `file:line`.
-2. Merge provenance: `found by: Claude`, `found by: Codex`, or `found by: Claude + Codex`.
-3. Categorize by severity in order: `Critical` -> `Major` -> `Minor`.
-4. Group findings by file within each severity.
-5. Write `${REVIEW_DIR}/report.md`.
+Write `${REVIEW_DIR}/report.md`.
 
-No-findings rule:
+## Step 6: Present Report
 
-- If neither verifier has confirmed findings, write report with `No issues found` and keep severity sections empty.
-
-## 7) Present Report
-
-Display summary in this format:
+Display:
 
 ```markdown
 ## Code Review Report — {scope} [{focus}]
@@ -266,29 +151,12 @@ Review ID: {REVIEW_ID} | Claude: X findings | Codex: Y findings | Verified: Z to
 Full report: .claude/reviews/{REVIEW_ID}/report.md
 ```
 
-If degraded mode occurred (Codex unavailable/failed or Claude failed twice), note it directly under the summary line.
+If degraded (Codex unavailable/failed), note it under the summary line.
 
-## 8) Offer Fix Plan
+Then ask: `Want me to generate a /plan to fix these issues? (Critical + Major only)`
 
-After presenting the report, ask exactly:
+## Context Rules
 
-```text
-Want me to generate a /plan to fix these issues? (Critical + Major only)
-```
-
-## 9) Context Discipline Rules
-
-- Workers receive `${REVIEW_DIR}/brief.md`, not full conversation context.
-- Verifiers each receive exactly one review file + code access.
-- HMFIC reads only verified outputs, never raw reviews.
-
-## 10) Required Signals
-
-Emit these markers at key stages:
-
-- `<<<CLAUDE_REVIEW_DONE>>>` — Claude reviewer finished
-- `<<<CODEX_REVIEW_DONE>>>` — Codex reviewer finished
-- `<<<VERIFICATION_DONE>>>` — Both verifiers finished
-- `<<<REVIEW_COMPLETE>>>` — Full pipeline done
-
-Emit `<<<REVIEW_COMPLETE>>>` only after report is written and displayed.
+- Workers get `brief.md`, not conversation context
+- Verifiers get exactly one review file + code access each
+- Synthesis reads only verified outputs, never raw reviews

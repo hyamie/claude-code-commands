@@ -95,11 +95,34 @@ Find the FIRST task section (`### Task N:` or `### Iteration N:`) with uncomplet
    - Implement ALL items in current task section (all `[ ]` checkboxes)
    - Write tests for implementation
 
-3. **Validate:**
+3. **De-Sloppify Pass:**
+   Review all changes from this task and clean up before validating:
+   - Remove tests that assert on language/framework behavior (not your code)
+   - Remove redundant type checks that the type system already enforces
+   - Remove over-defensive error handling that will never trigger
+   - Remove console.log / print debug statements
+   - Remove commented-out code
+   - Remove unnecessary abstractions that add indirection without value
+
+4. **Validate:**
    - Run test/lint commands from plan's Validation Commands section
    - Fix any failures, repeat until all pass
+   - **Build/compilation error fallback:** If validation fails with a build or compilation error:
+     1. Invoke the build-error-resolver agent on the failing files
+     2. Re-run validation
+     3. If still failing after build-error-resolver, proceed with the normal fix cycle
 
-4. **Complete:**
+4a. **Security Review:**
+   Invoke the security-reviewer agent on all files changed in this task:
+   ```
+   Use Task tool with subagent_type: "security-reviewer"
+   Prompt: "Review changed files for security issues. Files: [list changed files via git diff --name-only HEAD]. Flag CRITICAL findings that must be fixed before committing."
+   ```
+   - If CRITICAL findings are reported, fix them before committing
+   - WARNING-level findings: note in commit message and continue
+   - Skip if no code files changed (config-only or doc-only tasks)
+
+5. **Complete:**
    - Edit plan file: change `[ ]` to `[x]` for completed items
    - Commit: `git commit -m "feat: <brief task description>"`
 

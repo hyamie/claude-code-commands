@@ -107,9 +107,11 @@ CURRENT=$(ls .claude/commands/*.md 2>/dev/null | xargs -I{} basename {} .md | so
 git diff --name-only HEAD~3 -- .claude/commands/ 2>/dev/null
 ```
 
-If new commands were added or removed, update your command reference:
+If new commands were added or removed, update the Obsidian slash command reference:
+- Read `WSL/claude-env/.claude/docs/boris-tips-commands.md` via Obsidian MCP
 - Add entries for new commands (name, one-line description, usage example)
 - Remove entries for deleted commands
+- Write back via Obsidian MCP
 
 This adds ~5 seconds. Skip if no command changes detected.
 

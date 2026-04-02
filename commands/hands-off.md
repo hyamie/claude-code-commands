@@ -16,7 +16,7 @@ argument-hint: ""
 | `railway` | Deploy, logs, vars, services - FULL control |
 | `supabase` | Migrations, functions, secrets, db operations |
 | `gh` | PRs, issues, releases, repo management |
-| `op` | 1Password - get ANY credential from your vault |
+| `op` | 1Password - get ANY credential from your 1Password vault |
 | `docker` | Container management |
 | `npm` / `npx` | Package management, run scripts |
 
@@ -28,7 +28,7 @@ argument-hint: ""
 cat .mcp.json 2>/dev/null || cat .claude/.mcp.json 2>/dev/null
 
 # Read global MCPs
-cat ~/.claude.json 2>/dev/null | jq '.mcpServers | keys'
+cat ~/claude-env/.mcp.json
 ```
 
 Common MCPs you might have:
@@ -44,7 +44,7 @@ Common MCPs you might have:
 ### 1Password (op CLI)
 All credentials are in 1Password. Never ask the user for secrets.
 ```bash
-op item get "SERVICE_NAME" --vault YOUR_VAULT --fields "API Token" --reveal
+op item get "Railway" --vault YourVault --fields "API Token" --reveal
 ```
 
 ## The Rule

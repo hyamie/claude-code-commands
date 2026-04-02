@@ -56,16 +56,13 @@ fi
 
 ### Step 2: Generate Questions via Codex
 
-```
-Call mcp__codex__codex with prompt:
+```bash
+# Gather code context
+CODE="[relevant code sections]"
+CONTEXT="[CLAUDE.md contents]"
 
-"You are a senior engineer conducting a code review interview.
-
-CODE TO REVIEW:
-[relevant code sections]
-
-CONTEXT:
-[CLAUDE.md contents]
+cat > /tmp/grill-prompt.md << 'PROMPT_EOF'
+You are a senior engineer conducting a code review interview.
 
 Generate 5-7 probing questions that test whether the developer truly understands this code. Focus on:
 
@@ -80,7 +77,19 @@ For each question:
 - What a GOOD answer should include
 - Red flags that indicate poor understanding
 
-Be tough but fair. The goal is learning, not gotchas."
+Be tough but fair. The goal is learning, not gotchas.
+PROMPT_EOF
+
+echo -e "\n\nCODE TO REVIEW:\n$CODE\n\nCONTEXT:\n$CONTEXT" >> /tmp/grill-prompt.md
+
+COMPANION="$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)"
+timeout --kill-after=30 300 node "$COMPANION" task \
+  --cwd "$(pwd)" \
+  --json \
+  --prompt-file /tmp/grill-prompt.md \
+  2>/tmp/grill-stderr.log | jq -r '.rawOutput // empty' > /tmp/grill-questions.md
+
+cat /tmp/grill-questions.md
 ```
 
 ### Step 3: Interactive Q&A
@@ -101,10 +110,9 @@ Your answer:
 
 For each answer, send to Codex for evaluation:
 
-```
-Call mcp__codex__codex with prompt:
-
-"Evaluate this answer to a code review question.
+```bash
+cat > /tmp/grill-eval-prompt.md << PROMPT_EOF
+Evaluate this answer to a code review question.
 
 QUESTION: [question]
 EXPECTED GOOD ANSWER SHOULD INCLUDE: [criteria from step 2]
@@ -115,7 +123,17 @@ Rate the answer:
 - PARTIAL: Gets the idea but missing key details
 - FAIL: Misses the point or shows misunderstanding
 
-Provide brief feedback explaining the rating."
+Provide brief feedback explaining the rating.
+PROMPT_EOF
+
+COMPANION="$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)"
+timeout --kill-after=30 120 node "$COMPANION" task \
+  --cwd "$(pwd)" \
+  --json \
+  --prompt-file /tmp/grill-eval-prompt.md \
+  2>/tmp/grill-eval-stderr.log | jq -r '.rawOutput // empty' > /tmp/grill-eval.md
+
+cat /tmp/grill-eval.md
 ```
 
 ### Step 5: Track Score and Report

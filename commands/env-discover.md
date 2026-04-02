@@ -17,11 +17,14 @@ Check these sources for new MCPs:
 
 ### 2. Compare Against Installed MCPs
 
-Read your current MCPs:
-```bash
-cat ~/.claude.json 2>/dev/null | jq '.mcpServers | keys'
-cat .mcp.json 2>/dev/null | jq 'keys'
-```
+Currently installed MCPs (from `~/.claude.json`):
+- github
+- playwright
+- sequential-thinking
+- n8n
+- unifi
+- memory
+- cloudflare
 
 ### 3. Stack-Based Recommendations
 
@@ -44,14 +47,48 @@ Based on detected stack, suggest relevant MCPs:
 
 For each installed MCP, check if newer versions exist:
 ```bash
+# Example for npm-based MCPs
 npm show <mcp-package> version
 ```
+
+## Output Format
+
+```
+MCP Discovery Report
+====================
+
+## Currently Installed
+- github (via 1Password wrapper)
+- playwright
+- sequential-thinking
+- n8n
+- unifi
+- memory
+- cloudflare
+
+## Recommended Based on Stack
+
+### High Priority
+| MCP | Why | Install |
+|-----|-----|---------|
+| postgres | Detected PostgreSQL usage | npx @mcp/postgres |
+
+### Nice to Have
+| MCP | Why | Install |
+|-----|-----|---------|
+| slack | Team communication | npx @mcp/slack |
+
+## New/Popular MCPs
+
+Recent additions to awesome-mcp-servers:
+- [MCP name]: [description]
+- ...
 
 ## Installation Guide
 
 To install a new MCP:
 
-1. Add to `~/.claude.json`:
+1. Add to ~/.claude.json:
    ```json
    "mcp-name": {
      "command": "npx",
@@ -59,18 +96,19 @@ To install a new MCP:
    }
    ```
 
-2. If credentials needed, use a 1Password wrapper:
+2. If credentials needed, use 1Password wrapper:
    ```json
    "mcp-name": {
-     "command": "~/.claude/scripts/1password-mcp-wrapper.sh",
+     "command": "/home/user/.claude/scripts/1password-mcp-wrapper.sh",
      "args": ["npx", "-y", "@mcp/package-name"],
      "env": {
-       "API_KEY_REF": "op://YOUR_VAULT/mcp-name/api-key"
+       "API_KEY_REF": "op://YourVault/mcp-name/api-key"
      }
    }
    ```
 
 3. Restart Claude Code to load the new MCP.
+```
 
 ## Web Search
 

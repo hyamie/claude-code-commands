@@ -5,12 +5,20 @@ Perform a comprehensive audit of the Claude Code environment (2-5 minutes).
 ## Process
 
 ### 1. MCP Server Audit
+Run `~/.claude/scripts/mcp-health.sh` or manually check:
 
-Read your MCP config and check each server:
-```bash
-cat ~/.claude.json 2>/dev/null | jq '.mcpServers | keys'
-cat .mcp.json 2>/dev/null | jq 'keys'
-```
+**Global MCPs** (from `~/.claude.json`):
+- github
+- playwright
+- sequential-thinking
+- n8n
+- unifi
+- memory
+- cloudflare
+
+**Project MCPs** (from `.mcp.json`):
+- task_orchestrator_mcp
+- observability
 
 For each MCP, report:
 - Status: Running/Stopped/Error
@@ -18,8 +26,9 @@ For each MCP, report:
 - Last successful connection
 
 ### 2. Agent Configuration Audit
+Run `~/.claude/scripts/validate-agents.py` or manually check:
 
-Validate all agents in your agents directory:
+Validate all agents in `~/claude-env/.claude/agents/`:
 - YAML frontmatter valid
 - Required fields present (name, description, tools)
 - Tool permissions align with architecture
@@ -51,7 +60,7 @@ pip list --format=freeze | head -20
 
 ### 5. Skill Inventory
 ```bash
-ls ~/.claude/skills/ 2>/dev/null | wc -l
+ls ~/claude-env/.claude/skills/ | wc -l
 ```
 List skill categories and counts.
 
@@ -79,7 +88,7 @@ Generated: YYYY-MM-DD HH:MM
 ## MCP Servers
 | Server | Status | Notes |
 |--------|--------|-------|
-| github | OK | ... |
+| github | OK | via 1Password |
 | ... | ... | ... |
 
 ## CLI Tools
