@@ -50,7 +50,12 @@ permissions:
 
 concurrency:
   group: gitleaks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on pull requests ONLY. A PR always re-scans base..head, so a
+  # cancelled PR run loses no coverage. A push run does not: push N scans before(N)..after(N),
+  # so cancelling it when push N+1 arrives means the commits from push N are never scanned by
+  # anything. Caught in the pilot, where a branch-creation run and a commit run landed one
+  # second apart and the first was cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gitleaks:
